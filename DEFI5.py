@@ -30,7 +30,21 @@ st.markdown("""
     [data-testid="stSidebar"] {
         background: linear-gradient(180deg, #0f2744 0%, #1a3a5c 100%);
     }
-    [data-testid="stSidebar"] * { color: #e8f0fe !important; }
+
+    /* Texte sidebar — sélecteurs précis pour ne pas impacter le bouton collapse */
+    [data-testid="stSidebar"] p,
+    [data-testid="stSidebar"] span,
+    [data-testid="stSidebar"] label,
+    [data-testid="stSidebar"] div {
+        color: #e8f0fe !important;
+    }
+
+    /* Bouton collapse (>) — toujours visible */
+    [data-testid="collapsedControl"] {
+        color: #0f2744 !important;
+        background-color: white !important;
+        border-radius: 0 4px 4px 0 !important;
+    }
 
     .kpi-card {
         background: white;
