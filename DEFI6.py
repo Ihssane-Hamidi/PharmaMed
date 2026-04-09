@@ -974,7 +974,113 @@ def page_ca():
             margin=dict(l=10, r=10, t=10, b=60), height=420, showlegend=False
         )
         st.plotly_chart(fig_p, use_container_width=True)
+    # ── Répartition SMR / ASMR pondérée par CA ───────────────────────────────
+    # À insérer dans page_ca() après la section bar/pie existante,
+    # avant la section "Profil SMR / ASMR du portefeuille"
+    # ─────────────────────────────────────────────────────────────────────────
 
+    st.markdown("<hr class='thin'>", unsafe_allow_html=True)
+    section_header("📊 Répartition SMR / ASMR pondérée par le CA")
+    st.caption(
+        "Chaque tranche représente la **part du chiffre d'affaires** "
+        "portée par les médicaments de ce niveau SMR ou ASMR."
+    )
+
+    def pie_ca_weighted(df_ca: pd.DataFrame, col: str, label_map: dict,
+                        color_map: dict, title: str, height: int = 380):
+        """
+        Camembert où chaque tranche = somme de Revenue_USD
+        pour les médicaments d'un même niveau SMR/ASMR.
+        """
+        df_c = df_ca.copy()
+        df_c["_label"] = (
+            df_c[col]
+            .fillna("Non renseigné")
+            .astype(str)
+            .str.strip()
+            .map(lambda x: label_map.get(x, x))
+        )
+
+        # Agréger le CA par niveau
+        agg = (
+            df_c.groupby("_label")["Revenue_USD"]
+            .sum()
+            .reset_index()
+            .rename(columns={"_label": "Niveau", "Revenue_USD": "CA (USD)"})
+        )
+        agg = agg[agg["CA (USD)"] > 0].sort_values("CA (USD)", ascending=False)
+
+        if agg.empty:
+            st.info("Aucune donnée disponible.")
+            return
+
+        color_seq = [color_map.get(n, "#cccccc") for n in agg["Niveau"]]
+
+        fig = px.pie(
+            agg,
+            names="Niveau",
+            values="CA (USD)",
+            hole=0.4,
+            title=title,
+        )
+        fig.update_traces(
+            marker=dict(colors=color_seq),
+            textposition="inside",
+            textinfo="percent+label",
+            hovertemplate="<b>%{label}</b><br>CA : $%{value:,.0f}<br>Part : %{percent}<extra></extra>",
+        )
+        fig.update_layout(
+            margin=dict(t=50, b=20, l=20, r=160),
+            height=height,
+            showlegend=True,
+            legend=dict(
+                orientation="v", yanchor="middle", y=0.5, x=1.02, font=dict(size=11)
+            ),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Tableau détail
+        agg["Part du CA"] = (agg["CA (USD)"] / agg["CA (USD)"].sum() * 100).round(1).astype(str) + "%"
+        agg["CA (USD)"] = agg["CA (USD)"].apply(lambda x: f"${x:,.0f}")
+        st.dataframe(agg, use_container_width=True, hide_index=True)
+
+    # Vérifier que les colonnes SMR/ASMR existent dans df1
+    smr_col_ca  = next((c for c in lab_ca_df.columns
+                        if "valeur" in c.lower() and "smr" in c.lower()), None)
+    asmr_col_ca = next((c for c in lab_ca_df.columns
+                        if "valeur" in c.lower() and "asmr" in c.lower()), None)
+
+    has_smr  = smr_col_ca  is not None and lab_ca_df[smr_col_ca].notna().any()
+    has_asmr = asmr_col_ca is not None and lab_ca_df[asmr_col_ca].notna().any()
+
+    if not has_smr and not has_asmr:
+        st.info("ℹ️ Aucune donnée SMR/ASMR disponible pour ce laboratoire.")
+    else:
+        col_smr_pie, col_asmr_pie = st.columns(2, gap="large")
+
+        with col_smr_pie:
+            if has_smr:
+                pie_ca_weighted(
+                    lab_ca_df,
+                    col=smr_col_ca,
+                    label_map=SMR_LABELS_SHORT,
+                    color_map=SMR_COLORS_SHORT,
+                    title="SMR — Part du CA",
+                )
+            else:
+                st.info("Aucune donnée SMR.")
+
+        with col_asmr_pie:
+            if has_asmr:
+                pie_ca_weighted(
+                    lab_ca_df,
+                    col=asmr_col_ca,
+                    label_map=ASMR_LABELS_SHORT,
+                    color_map=ASMR_COLORS_SHORT,
+                    title="ASMR — Part du CA",
+                )
+            else:
+                st.info("Aucune donnée ASMR.")
     st.markdown("<hr class='thin'>", unsafe_allow_html=True)
     section_header("📋 Profil SMR / ASMR du portefeuille")
     cols_show = [c for c in [
