@@ -184,12 +184,22 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def clean_illegal_characters(dataframe: pd.DataFrame) -> pd.DataFrame:
-    """Supprime les caractères de contrôle illégaux pour Excel."""
-    illegal = re.compile(r"[\x00-\x08\x0B-\x0C\x0E-\x1F]")
+    """Supprime TOUS les caractères illégaux pour openpyxl."""
+    # Regex complet basé sur la spec OpenXML
+    illegal = re.compile(
+        r"[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F"
+        r"\x80-\x9F"
+        r"\uFFFE\uFFFF"
+        r"\uD800-\uDFFF]"
+    )
     df_c = dataframe.copy()
     for col in df_c.columns:
         if df_c[col].dtype == "object":
-            df_c[col] = df_c[col].astype(str).apply(lambda x: illegal.sub("", x))
+            df_c[col] = (
+                df_c[col]
+                .astype(str)
+                .apply(lambda x: illegal.sub("", x))
+            )
     return df_c
 
 
