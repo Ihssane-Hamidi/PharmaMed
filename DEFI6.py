@@ -1555,7 +1555,7 @@ def page_portefeuille():
 PAGES = {
     "🔎  Recherche Produit":   page_recherche,
     "🏢  Analyse Laboratoire": page_laboratoire,
-    "💰  Chiffre d'Affaires":  page_ca,
+    "🪙  Chiffre d'Affaires":  page_ca,
     "📁  Portefeuille":        page_portefeuille,
 }
 
