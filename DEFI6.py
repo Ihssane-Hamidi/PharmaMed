@@ -658,7 +658,7 @@ with st.sidebar:
     page = st.radio("", [
         "🔎  Recherche Produit",
         "🏢  Analyse Laboratoire",
-        "* Chiffre d'Affaires",
+        "💰  Chiffre d'Affaires",
         "📁  Portefeuille",
     ], label_visibility="collapsed")
     st.markdown("---")
@@ -1555,12 +1555,8 @@ def page_portefeuille():
 PAGES = {
     "🔎  Recherche Produit":   page_recherche,
     "🏢  Analyse Laboratoire": page_laboratoire,
-    "*  Chiffre d'Affaires":  page_ca,
+    "💰  Chiffre d'Affaires":  page_ca,
     "📁  Portefeuille":        page_portefeuille,
 }
 
 PAGES[page]()
-
-
-
-
