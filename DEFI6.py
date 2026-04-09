@@ -396,8 +396,27 @@ def compute_kpi(dataframe: pd.DataFrame):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 8.  FUZZY MATCHING  (refonte)
+# 8.  FUZZY MATCHING  (v3 — Jaccard pur, seuil 0.7, sans token_substring)
 # ══════════════════════════════════════════════════════════════════════════════
+#
+# REMPLACE entièrement le bloc §8 de app_defis_pharma.py
+#
+# Changements vs v2 :
+#   - token_substring() SUPPRIMÉ  → était la source des 310 faux positifs
+#   - combined_score()  SUPPRIMÉ  → remplacé par token_jaccard() seul
+#   - SEUIL_FUZZY passé de 0.5 → 0.70
+#   - build_selectbox_options() : cas "aucun" liste groupe_racine + filiales
+#   - find_candidates() : plus de call à token_substring
+#
+# Pourquoi Jaccard pur règle le problème :
+#   "Laboratoires Servier" → tokens {"SERVIER"}          (LABORATOIRES = stopword)
+#   "Laboratoires Alcon"   → tokens {"ALCON"}
+#   "Laboratoires Alter"   → tokens {"ALTER"}
+#   Jaccard("SERVIER", "ALCON") = 0 ∩ / {SERVIER,ALCON} = 0.0  → exclu ✓
+#   Jaccard("SERVIER", "SERVIER INTERNATIONAL") = {SERVIER}/{SERVIER,INTERNATIONAL}
+#                                               = 0.5 < 0.7    → exclu ✓
+#   Jaccard("SERVIER", "SERVIER") = 1.0 ≥ 0.7               → retenu ✓
+# ──────────────────────────────────────────────────────────────────────────────
 
 STOPWORDS = {
     "LABORATORIES", "LABORATORY", "LABS", "PHARMA", "PHARMACEUTICALS",
@@ -406,109 +425,133 @@ STOPWORDS = {
     "GROUP", "GROUPE", "GMBH", "SARL", "SAS", "SA", "AG", "BV", "NV",
     "LIMITED", "LTD", "INC", "CORP", "CORPORATION", "COMPANY", "CO",
     "NORTH", "SOUTH", "EAST", "WEST", "AMERICA", "AMERICAS", "ASIA",
-    "PACIFIC", "US", "USA", "UK", "EU", "LABORATOIRES", "LABORATOIRE",
+    "PACIFIC", "US", "USA", "UK", "EU",
+    "LABORATOIRES", "LABORATOIRE",   # ← ajout clé
+    "ET", "AND", "THE", "DE", "DU", "DES", "LE", "LA", "LES",
 }
 
+SEUIL_FUZZY = 0.70   # strict : seuls les noms vraiment proches matchent
+
+
 def meaningful_tokens(label: str, min_len: int = 3) -> list[str]:
-    """Extrait les tokens significatifs d'un label (sans stopwords, longueur >= min_len)."""
-    raw = re.split(r"[\s\-_/,\.\(\)]+", label.upper())
+    """
+    Extrait les tokens significatifs d'un label.
+    - Découpe sur espaces, tirets, slashes, parenthèses, points, virgules
+    - Exclut les stopwords et les tokens trop courts
+    Exemple :
+      "Laboratoires Servier SA"      → ["SERVIER"]
+      "Bristol-Myers Squibb France"  → ["BRISTOL", "MYERS", "SQUIBB"]
+      "Novo Nordisk (Danemark)"      → ["NOVO", "NORDISK"]
+    """
+    raw = re.split(r"[\s\-_/,\.\(\);]+", label.upper())
     return [t for t in raw if len(t) >= min_len and t not in STOPWORDS]
 
 
 def token_jaccard(label: str, candidate: str) -> float:
     """
-    Score Jaccard sur les tokens significatifs des deux chaînes.
-    Jaccard = |A ∩ B| / |A ∪ B|
-    Avantage : symétrique, insensible aux tokens génériques (stopwords exclus),
-    ne favorise pas les longues chaînes qui partagent des mots communs.
-    Exemple :
-      "LABORATOIRES SERVIER" → tokens {"SERVIER"}
-      "SERVIER"              → tokens {"SERVIER"}
-      Jaccard = 1.0  ✓
+    Score de Jaccard sur les ensembles de tokens significatifs.
 
-      "LABORATOIRES SERVIER" → tokens {"SERVIER"}
-      "LABORATOIRES IPSEN"   → tokens {"IPSEN"}
-      Jaccard = 0.0  ✓ (plus de faux positif)
+    Jaccard(A, B) = |A ∩ B| / |A ∪ B|
+
+    Propriétés clés :
+      - Symétrique
+      - Insensible aux tokens génériques (stopwords exclus)
+      - NE favorise PAS les chaînes longues qui partagent des mots communs
+      - Retourne 0.0 si les deux ensembles sont vides (pas de division par zéro)
+
+    Exemples avec SEUIL = 0.70 :
+      "Servier" vs "Servier"                → 1.00  ✓ retenu
+      "Servier" vs "Servier Laboratoires"   → 0.50  ✗ exclu  (token SERVIER / {SERVIER})
+      "Servier" vs "Alcon"                  → 0.00  ✗ exclu
+      "Bristol Myers" vs "Bristol Myers Squibb" → 0.67  ✗ exclu (strict)
+      "Bristol Myers Squibb" vs "Bristol Myers Squibb" → 1.00 ✓ retenu
     """
     a = set(meaningful_tokens(label))
     b = set(meaningful_tokens(candidate))
     if not a and not b:
         return 0.0
-    union = a | b
-    inter = a & b
-    return len(inter) / len(union)
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
 
 
-def token_substring(label: str, candidate: str) -> float:
-    """
-    Bonus 0.6 si un token significatif du label est une sous-chaîne
-    d'un token du candidate (ou vice-versa). Capte les variantes
-    morphologiques (PFIZER → PFIZER-BMS, etc.)
-    Retourne 0 ou 0.6.
-    """
-    a_tokens = meaningful_tokens(label)
-    b_tokens = meaningful_tokens(candidate)
-    for ta in a_tokens:
-        for tb in b_tokens:
-            if ta in tb or tb in ta:
-                return 0.6
-    return 0.0
-
-
-def combined_score(label: str, candidate: str) -> float:
-    """
-    Score final = max(Jaccard, substring_bonus).
-    Seuil recommandé : 0.5
-    """
-    j = token_jaccard(label, candidate)
-    s = token_substring(label, candidate)
-    return max(j, s)
-
-
-SEUIL_FUZZY = 0.5
-
-
-def find_candidates(label: str, ref: pd.DataFrame,
-                    set_titulaires: set, set_groupes: set,
-                    all_groupes: list) -> dict:
+def find_candidates(
+    label: str,
+    ref: pd.DataFrame,
+    set_titulaires: set,
+    set_groupes: set,
+    all_groupes: list,
+) -> dict:
     """
     4 étapes ordonnées :
-      1. Exact sur Titulaire(s)
-      2. Exact sur groupe_racine
-      3. Fuzzy (combined_score >= SEUIL_FUZZY) sur groupe_racine
-      4. Aucun → retourner toutes les options du référentiel
+      1. Exact sur Titulaire(s)       → match_type = 'exact_tit'
+      2. Exact sur groupe_racine      → match_type = 'exact_grp'
+      3. Fuzzy Jaccard ≥ SEUIL_FUZZY  → match_type = 'fuzzy'
+      4. Aucun                        → match_type = 'aucun'
+
+    Étape 3 : on évalue séparément
+      a) les groupe_racine   (score Jaccard label vs groupe)
+      b) les Titulaire(s)    (score Jaccard label vs titulaire)
+    et on retourne les 5 meilleurs toutes sources confondues,
+    en évitant les doublons groupe/filiale.
     """
-    # Étape 1 — exact titulaire
+    # ── Étape 1 : exact titulaire ─────────────────────────────────────────────
     if label in set_titulaires:
         grp_parents = ref[ref["Titulaire(s)"] == label]["groupe_racine"].unique().tolist()
         return dict(match_type="exact_tit", tit_exact=label, grp_parents=grp_parents)
 
-    # Étape 2 — exact groupe
+    # ── Étape 2 : exact groupe ────────────────────────────────────────────────
     if label in set_groupes:
         filiales = ref[ref["groupe_racine"] == label]["Titulaire(s)"].unique().tolist()
         return dict(match_type="exact_grp", grp_exact=label, filiales=filiales)
 
-    # Étape 3 — fuzzy
-    scored = sorted(
-        [(g, combined_score(label, g)) for g in all_groupes if combined_score(label, g) >= SEUIL_FUZZY],
-        key=lambda x: x[1], reverse=True
-    )[:5]
-    if scored:
-        return dict(match_type="fuzzy", fuzzy_grp=scored)
+    # ── Étape 3 : fuzzy sur groupes ET titulaires ─────────────────────────────
+    scored_groupes = [
+        (g, token_jaccard(label, g))
+        for g in all_groupes
+    ]
+    scored_groupes = [
+        (g, sc) for g, sc in scored_groupes if sc >= SEUIL_FUZZY
+    ]
+    scored_groupes.sort(key=lambda x: x[1], reverse=True)
 
-    # Étape 4 — aucun → toutes les options
+    all_titulaires_list = ref["Titulaire(s)"].unique().tolist()
+    scored_tits = [
+        (t, token_jaccard(label, t))
+        for t in all_titulaires_list
+    ]
+    scored_tits = [
+        (t, sc) for t, sc in scored_tits if sc >= SEUIL_FUZZY
+    ]
+    scored_tits.sort(key=lambda x: x[1], reverse=True)
+
+    if scored_groupes or scored_tits:
+        return dict(
+            match_type="fuzzy",
+            fuzzy_grp=scored_groupes[:5],
+            fuzzy_tit=scored_tits[:5],
+        )
+
+    # ── Étape 4 : aucun ───────────────────────────────────────────────────────
     return dict(match_type="aucun")
 
 
-def build_selectbox_options(c: dict, label: str, ref: pd.DataFrame,
-                             all_groupes: list) -> list:
+def build_selectbox_options(
+    c: dict,
+    label: str,
+    ref: pd.DataFrame,
+    all_groupes: list,
+) -> list:
     """
-    Construit la liste d'options (col_filter, val_filter, description)
-    selon le type de correspondance trouvée.
-    Quand aucune correspondance : affiche tout le référentiel.
+    Construit la liste (col_filter, val_filter, description_affichée).
+    col_filter = None  →  option "Exclure" ou séparateur visuel (non sélectionnable).
+
+    Cas 'aucun' : propose ❌ Exclure en tête,
+                  puis TOUS les groupe_racine avec leurs filiales.
     """
     opts = []
 
+    # ── exact titulaire ───────────────────────────────────────────────────────
     if c["match_type"] == "exact_tit":
         opts.append(("Titulaire(s)", label, f"🏭 Titulaire (exact) : {label}"))
         for g in c["grp_parents"]:
@@ -517,34 +560,58 @@ def build_selectbox_options(c: dict, label: str, ref: pd.DataFrame,
                 if t != label:
                     opts.append(("Titulaire(s)", t, f"   ↳ 🏭 Autre filiale : {t}"))
 
+    # ── exact groupe ──────────────────────────────────────────────────────────
     elif c["match_type"] == "exact_grp":
-        opts.append(("groupe_racine", label,
-                     f"🏢 Groupe racine (exact) : {label}  [{len(c['filiales'])} filiale(s)]"))
+        opts.append((
+            "groupe_racine", label,
+            f"🏢 Groupe racine (exact) : {label}  [{len(c['filiales'])} filiale(s)]",
+        ))
         for t in c["filiales"]:
             opts.append(("Titulaire(s)", t, f"🏭 Filiale : {t}"))
 
+    # ── fuzzy ─────────────────────────────────────────────────────────────────
     elif c["match_type"] == "fuzzy":
-        for g, score in c["fuzzy_grp"]:
+        seen_groupes = set()
+
+        # Groupes fuzzy
+        for g, score in c.get("fuzzy_grp", []):
             icon = "🟢" if score >= 0.85 else "🔶"
             filiales = ref[ref["groupe_racine"] == g]["Titulaire(s)"].unique().tolist()
-            opts.append(("groupe_racine", g,
-                         f"{icon} Groupe racine ({score:.0%}) : {g}  [{len(filiales)} filiale(s)]"))
+            opts.append((
+                "groupe_racine", g,
+                f"{icon} Groupe ({score:.0%}) : {g}  [{len(filiales)} filiale(s)]",
+            ))
+            seen_groupes.add(g)
             for t in filiales:
                 opts.append(("Titulaire(s)", t, f"   ↳ 🏭 Filiale : {t}"))
+
+        # Titulaires fuzzy (si leur groupe n'est pas déjà listé)
+        for t, score in c.get("fuzzy_tit", []):
+            icon = "🟢" if score >= 0.85 else "🔶"
+            grp = ref[ref["Titulaire(s)"] == t]["groupe_racine"].values
+            grp_str = grp[0] if len(grp) else "?"
+            if grp_str not in seen_groupes:
+                opts.append((
+                    "Titulaire(s)", t,
+                    f"{icon} Filiale ({score:.0%}) : {t}  [groupe : {grp_str}]",
+                ))
+
         opts.append((None, None, "❌ Exclure de l'analyse"))
 
-    else:  # aucun → toutes les options du référentiel
-        opts.append((None, None, f"❌ Exclure (aucune correspondance automatique)"))
-        opts.append((None, None, "── Toutes les options du référentiel ──────────"))
+    # ── aucun : ❌ en tête + référentiel complet ──────────────────────────────
+    else:
+        opts.append((None, None, "❌ Exclure (aucune correspondance automatique)"))
+        opts.append((None, None, "─── Référentiel complet — choisir manuellement ───"))
         for g in sorted(all_groupes):
             filiales = ref[ref["groupe_racine"] == g]["Titulaire(s)"].unique().tolist()
-            opts.append(("groupe_racine", g,
-                         f"🏢 Groupe racine : {g}  [{len(filiales)} filiale(s)]"))
-            for t in filiales:
-                opts.append(("Titulaire(s)", t, f"   ↳ 🏭 Filiale : {t}"))
+            opts.append((
+                "groupe_racine", g,
+                f"🏢 {g}  [{len(filiales)} filiale(s)]",
+            ))
+            for t in sorted(filiales):
+                opts.append(("Titulaire(s)", t, f"   ↳ 🏭 {t}"))
 
     return opts
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 9.  SIDEBAR
