@@ -658,7 +658,7 @@ with st.sidebar:
     page = st.radio("", [
         "🔎  Recherche Produit",
         "🏢  Analyse Laboratoire",
-        "💰  Chiffre d'Affaires",
+        "* Chiffre d'Affaires",
         "📁  Portefeuille",
     ], label_visibility="collapsed")
     st.markdown("---")
