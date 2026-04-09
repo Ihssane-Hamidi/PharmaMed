@@ -185,7 +185,6 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 def clean_illegal_characters(dataframe: pd.DataFrame) -> pd.DataFrame:
     """Supprime TOUS les caractères illégaux pour openpyxl."""
-    # Regex complet basé sur la spec OpenXML
     illegal = re.compile(
         r"[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F"
         r"\x80-\x9F"
@@ -201,6 +200,22 @@ def clean_illegal_characters(dataframe: pd.DataFrame) -> pd.DataFrame:
                 .apply(lambda x: illegal.sub("", x))
             )
     return df_c
+
+
+def export_excel(dataframe: pd.DataFrame, sheet_name: str = "Export") -> bytes:
+    output = io.BytesIO()
+    df_clean = clean_illegal_characters(dataframe)
+    # Forcer l'encodage utf-8 pour éliminer les caractères résiduels
+    for col in df_clean.columns:
+        if df_clean[col].dtype == "object":
+            df_clean[col] = (
+                df_clean[col]
+                .astype(str)
+                .apply(lambda x: x.encode('utf-8', errors='ignore').decode('utf-8'))
+            )
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df_clean.to_excel(writer, index=False, sheet_name=sheet_name)
+    return output.getvalue()
 
 
 def export_excel(dataframe: pd.DataFrame, sheet_name: str = "Export") -> bytes:
